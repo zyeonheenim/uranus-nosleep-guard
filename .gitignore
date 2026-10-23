@@ -1,0 +1,7 @@
+# 运行产生的日志（脚本会在 ~/Uranus_Imessage 下生成，不进仓库）
+*.log
+*.out
+*.err
+
+.DS_Store
+._*
