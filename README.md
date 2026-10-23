@@ -1,11 +1,38 @@
-# Uranus「防断流」补丁 · 唤醒后自动恢复
+# uranus-nosleep-guard
 
-> Mac 睡一觉醒来，Uranus 看起来还活着（8787 在监听、进程也在），但**网络栈被休眠挂死**，
-> 于是所有出网请求全部超时 —— 表现为 `ENOTFOUND` / `UND_ERR_CONNECT_TIMEOUT`、
-> iMessage 不回、IG 不动、主动发信不发。
->
-> 这个补丁在**唤醒后自动重启一次 Uranus**，把卡死的网络栈换掉。
-> 不禁用睡眠、不杀进程、不额外耗电，只在真的需要时动手。
+![Platform](https://img.shields.io/badge/platform-macOS-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Dependencies](https://img.shields.io/badge/deps-none-brightgreen)
+
+**Mac 睡一觉醒来，Uranus 还活着，但网络栈已经被休眠挂死了 —— 这个补丁让它自动恢复。**
+
+Uranus 睡醒后常常「假活」：8787 端口照常监听、进程也在、控制台打得开，
+但所有出网请求全部超时（`ENOTFOUND` / `UND_ERR_CONNECT_TIMEOUT`），
+于是 iMessage 不回消息、IG 不动、定时主动发信不发。
+本工具检测到这种情况后**只重启一次 Uranus**，把卡死的网络栈换掉。
+
+- ✅ 不禁用系统睡眠
+- ✅ 不 `pkill`、不轮询拨号
+- ✅ 不额外耗电（5 分钟看一次，几毫秒结束）
+- ✅ 纯系统自带命令，零依赖
+- ✅ 只在「真的需要」时动手，平时完全静默
+
+> 📖 **完整用户指导（安装每一步、验证、调参、排错手册）见 [USAGE.md](USAGE.md)。**
+
+---
+
+## 目录
+
+- [一、它到底解决什么](#一它到底解决什么)
+- [二、判据（怎么决定要不要重启）](#二判据脚本怎么决定要不要重启)
+- [三、安装](#三安装)
+- [四、卸载](#四卸载)
+- [五、可选：彻底禁止整机睡眠](#五可选彻底禁止整机睡眠)
+- [六、可调参数](#六可调参数)
+- [七、为什么不用「杀进程重拨」那种看门狗](#七为什么不用杀进程重拨那种看门狗)
+- [八、兼容性](#八兼容性)
+- [九、和 Uranus 的关系](#九和-uranus-的关系)
+- [English quick start](#english-quick-start)
 
 ---
 
