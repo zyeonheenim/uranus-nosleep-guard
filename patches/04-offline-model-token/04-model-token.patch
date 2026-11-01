@@ -132,8 +132,8 @@
 + * 三种 usage 形状都认（2026-11-01 晚补）：
 + *  - OpenAI：`prompt_tokens / completion_tokens / prompt_tokens_details.cached_tokens`
 + *  - Gemini 原生：`usageMetadata.promptTokenCount / candidatesTokenCount /
-+ *    cachedContentTokenCount` —— Google V金走的就是这种，第一版只认 OpenAI
-+ *    形状，V金那轮读出来全是 0，被存档层当「没数据」清掉了
++ *    cachedContentTokenCount` —— Gemini 原生直连走的就是这种，第一版只认 OpenAI
++ *    形状，那条线的轮次读出来全是 0，被存档层当「没数据」清掉了
 + *  - Claude：`input_tokens / output_tokens / cache_read_input_tokens`
 + * 读不出来的字段按 0 算，in/out 双 0 交给调用方当「没有」处理。
 + */

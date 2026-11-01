@@ -406,7 +406,7 @@
 +    if (!popped.length) return s;
 +    // 旧稿先进 story 级 pendingAlts 暂存；重新生成的那条助手轮 appendTurn 时接走。
 +    // 🔴 绝不能挂到 user 轮上：user 气泡出现「恢复」按钮，一点就把角色旧稿
-+    // 写进 user 正文（10-28 实际翻车：金智源的 333 字 prompt 被替换成 1.3 万字正文）。
++    // 写进 user 正文（实际翻车过：user 那轮的一句 prompt 被整段长正文顶掉）。
 +    const pending = (s.pendingAlts ?? []).concat(
 +      // 连续重 roll 时，被砍的回复自己身上已经挂着更旧的历史版本 —— 一起带走，
 +      // 旧的排前面（alts 是「它的历次版本」，比它正文更老）

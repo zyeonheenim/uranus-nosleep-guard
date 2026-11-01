@@ -23,10 +23,11 @@
 气泡标题行：
 
 ```
-郑成灿   今天 19:24   ｜小鸡农场 · [Build][抗截断] gemini-3.8-flash   ｜↑49.3k(46k) ↓189
-                      └── 这轮实际用的服务商 · 模型 ──┘              └─ 输入(缓存) 输出 ─┘
+助手   今天 19:24   ｜服务商 · 模型名   ｜↑49.3k(46k) ↓189
 ```
 
+- 开头是**角色（char）的显示名** —— 示例只写「助手」，实装就是你自己角色卡的名字
+- `｜服务商 · 模型` 是占位符写法，不指任何具体服务商
 - 悬停看精确值：`输入 49299 tokens（缓存命中 45964）· 输出 189`
 - 历史版本抽屉里每一版也带自己的用量（`· ↑1.3k ↓70`），恢复旧稿时用量跟着版本走
 - 上游没回 usage 的那一轮就不显示 —— 不编数字
@@ -43,8 +44,8 @@
 
 | 服务商类型 | 字段 |
 |---|---|
-| OpenAI 兼容（小鸡、聚梦、织云、舒芙蕾…） | `prompt_tokens` / `completion_tokens` / `prompt_tokens_details.cached_tokens` |
-| **Gemini 原生**（Google Vertex 那条线） | `usageMetadata.promptTokenCount` / `candidatesTokenCount`（+ `thoughtsTokenCount`）/ `cachedContentTokenCount` |
+| OpenAI 兼容（绝大多数中转 / 聚合服务商） | `prompt_tokens` / `completion_tokens` / `prompt_tokens_details.cached_tokens` |
+| **Gemini 原生**（Vertex / AI Studio 那类直连） | `usageMetadata.promptTokenCount` / `candidatesTokenCount`（+ `thoughtsTokenCount`）/ `cachedContentTokenCount` |
 | Claude | `input_tokens` / `output_tokens` / `cache_read_input_tokens` |
 
 第一版只认 OpenAI 形状，于是 Gemini 原生那条线的轮次读出来全是 0，
@@ -82,5 +83,5 @@ node uninstall.mjs --run
 ## 限制
 
 - **只有新生成的轮次有数字**。历史轮次的用量当时没存，补不回来
-- 走「按次计费」的源（比如小鸡农场那种 🐥0.001/次），token 数跟钱无关 —— 这里只显示量，不折算钱
+- 走「按次计费」的源（一个价买 N 次、跟 token 数无关那种），token 数跟钱无关 —— 这里只显示量，不折算钱
 - 不显示首字延迟 / tok/s：那要在前端接流式增量时计时，属于另一个改动
