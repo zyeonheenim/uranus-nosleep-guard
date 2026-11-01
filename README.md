@@ -57,7 +57,8 @@
 **手上已经有 Uranus：**
 
 ```bash
-git clone https://github.com/zyeonheenim/uranus_patches_awesome.git
+# 仓库当前地址仍是旧名 uranus-nosleep-guard（改名待办），克隆时指定成本地目录名
+git clone https://github.com/zyeonheenim/uranus-nosleep-guard.git uranus_patches_awesome
 cd uranus_patches_awesome
 
 node install.mjs                 # 先看：会改哪些文件（不写盘）
