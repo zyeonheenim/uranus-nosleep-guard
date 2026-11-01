@@ -1,0 +1,421 @@
+--- a/client/src/panels/offline.jsx
++++ b/client/src/panels/offline.jsx
+@@ -44,6 +44,7 @@
+   Eye,
+   EyeOff,
+   FileText,
++  History,
+   Loader2,
+   MoreHorizontal,
+   Pencil,
+@@ -816,6 +817,9 @@
+   roleKey,
+   auto,
+   onVoiceError,
++  altsOpen,
++  onAlts,
++  onRestore,
+ }) {
+   /*
+    * 角色那侧先把没人接手的自造标记收掉（见 `offlinehtml.js:dropStray`）——
+@@ -837,6 +841,9 @@
+    * 散文回到页面上走 React。不带 HTML 的走下面那条老路，一个字都没变。
+    */
+   const blocks = useMemo(() => (isHtml ? splitRich(text) : null), [isHtml, text]);
++  // ㉑ 这条轮的历史版本（重 roll 旧稿挂在 user 轮、手改旧稿挂在被改的那条自己身上）
++  const versions = turn.alts ?? [];
++  const textStyle = boxStyle ? { color: boxStyle.color } : undefined;
+ 
+   return (
+     <div className={`flex items-start gap-3 ${mine ? "flex-row-reverse" : ""}`}>
+@@ -853,6 +860,21 @@
+           {turn.hidden && (
+             <span className="text-meta text-warn">已隐藏 · 不进下一轮的上下文</span>
+           )}
++          {versions.length > 0 && (
++            /* 边框按钮而不是裸文字：这一行平时全是灰字，得一眼能认出「这里能点」 */
++            <button
++              type="button"
++              onClick={() => onAlts(altsOpen ? "" : turn.id)}
++              className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta transition-colors duration-150 ${
++                altsOpen
++                  ? "border-ink-soft bg-paper text-ink"
++                  : "border-line bg-sunken text-ink-soft hover:border-ink-soft hover:text-ink"
++              }`}
++            >
++              <History size={12} />
++              {altsOpen ? "收起历史" : `历史 ${versions.length}`}
++            </button>
++          )}
+         </div>
+ 
+         {editing ? (
+@@ -948,6 +970,39 @@
+             )}
+           </div>
+         )}
++
++        {/* ㉑ 历史版本：重 roll / 手改的旧稿，可一键恢复（恢复会把当前稿再留底） */}
++        {altsOpen && versions.length > 0 && (
++          <div className="mt-1.5 grid grid-cols-1 gap-2 border border-dashed border-line bg-sunken px-3 py-2.5">
++            <span className="text-meta text-ink-faint">
++              这条的历史版本（旧的在前）· 点 ⟲ 恢复，现在的正文会先留底
++            </span>
++            {versions.map((v) => (
++              <div key={v.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-2">
++                <span
++                  className={`mt-0.5 shrink-0 text-meta ${
++                    v.kind === "reroll" ? "text-good" : "text-ink-meta"
++                  }`}
++                >
++                  {v.kind === "reroll" ? "重roll" : "手改"}
++                </span>
++                <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words border-l border-line pl-2 text-meta leading-relaxed text-ink-soft">
++                  {v.ts && <span className="text-ink-faint">{fmtStamp(v.ts)}　</span>}
++                  {v.content}
++                </p>
++                <button
++                  type="button"
++                  disabled={busy}
++                  onClick={() => onRestore(turn.id, v.content)}
++                  title="把这一版写回正文"
++                  className="rounded-item p-1 text-ink-faint transition-colors duration-150 hover:bg-paper hover:text-ink"
++                >
++                  <RotateCcw size={13} />
++                </button>
++              </div>
++            ))}
++          </div>
++        )}
+       </div>
+ 
+       {/* 三个点。菜单开着谁由外面拿着 —— 两条同时展开会挡住彼此 */}
+@@ -969,6 +1024,18 @@
+                 mine ? "left-0" : "right-0"
+               }`}
+             >
++              {versions.length > 0 && (
++                <button
++                  type="button"
++                  onClick={() => {
++                    onMenu("");
++                    onAlts(altsOpen ? "" : turn.id);
++                  }}
++                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-meta text-ink-soft transition-colors duration-150 hover:bg-sunken hover:text-ink"
++                >
++                  <History size={13} /> 历史版本 ({versions.length})
++                </button>
++              )}
+               <button
+                 type="button"
+                 onClick={() => onEdit(turn.id, turn.content ?? "")}
+@@ -1396,6 +1463,8 @@
+   const [input, setInput] = useState("");
+   const [menuKey, setMenuKey] = useState("");
+   const [editKey, setEditKey] = useState("");
++  // ㉑ 历史版本展开到哪条轮上（和 menuKey 同一个规矩：同时只开一条）
++  const [altsKey, setAltsKey] = useState("");
+   const [draft, setDraft] = useState("");
+   // 编辑框里的内容再存一份在 ref 里：`commitEdit` 要读它，但不能因此把 `draft`
+   // 写进依赖 —— 那样敲一个字就换一个新回调，下面每条 Bubble 的 memo 全废
+@@ -2023,6 +2092,24 @@
+   );
+ 
+   /**
++   * ㉑ 从历史版本恢复：把旧稿写回正文。
++   *
++   * 走的就是编辑那条 PATCH —— 服务端（offlinestore.js:updateTurn）会把**现在的**
++   * 正文留底进 alts，所以来回切换不会丢任何一版。恢复前先收掉菜单和版本列表。
++   */
++  const restoreTurn = useCallback(
++    (turnId, content) => {
++      setMenuKey("");
++      setAltsKey("");
++      run(`/turn/${encodeURIComponent(turnId)}`, {
++        method: "PATCH",
++        body: { content, storyId: sid },
++      });
++    },
++    [run, sid]
++  );
++
++  /**
+    * 结束线下。
+    *
+    * **后端是先按开关再出总结**（server/src/offline.js:endOffline），所以这条请求
+@@ -2341,6 +2428,9 @@
+                         onEdit={startEdit}
+                         onHide={toggleHide}
+                         onDrop={dropTurn}
++                        altsOpen={altsKey === t.id}
++                        onAlts={setAltsKey}
++                        onRestore={restoreTurn}
+                         roleKey={itemId}
+                         auto={turnAuto && lastAssistant?.id === t.id}
+                         onVoiceError={voiceError}
+--- a/server/src/index.js
++++ b/server/src/index.js
+@@ -215,7 +215,7 @@
+   appendSummary as appendOfflineSummary,
+   closeOffline,
+   currentStory,
+-  dropLastAssistant,
++  archiveLastAssistant,
+   listAll as listOffline,
+   mediaPathFor as offlineMediaPathFor,
+   newStory,
+--- a/server/src/offline.js
++++ b/server/src/offline.js
+@@ -54,7 +54,7 @@
+   appendTurn,
+   closeOffline,
+   currentStory,
+-  dropLastAssistant,
++  archiveLastAssistant,
+   endStory,
+   isOfflineOn,
+   readIndex,
+@@ -523,8 +523,8 @@
+      * 第一次进存档之前就已经过滤过了，再来一遍等于同一条规则连着作用两次
+      * （`imessage.js` 的重 roll 也是这么定的，同一个坑）。
+      */
+-    const dropped = dropLastAssistant(roleKey, story.id);
+-    logInfo(SCOPE, `重 roll：删掉末尾 ${dropped} 条回复，按同一份上文重来`);
++    const dropped = archiveLastAssistant(roleKey, story.id);
++    logInfo(SCOPE, `重 roll：删掉末尾 ${dropped} 条回复（旧稿已留底），按同一份上文重来`);
+     story = readStory(story.id) ?? story;
+   } else {
+     let said = String(text ?? "");
+--- a/server/src/offlinestore.js
++++ b/server/src/offlinestore.js
+@@ -65,6 +65,26 @@
+ /** 用户选项固定四条 —— 用户点名的「剧情选项就切割为 4 个气泡出来」。 */
+ export const CHOICE_COUNT = 4;
+ 
++/* ---- 版本留底（补丁㉑，2026-10-28）----
++ * 需求：重 roll / 手改 / 删除轮次都留底，能翻新旧版本对比。
++ * 设计：
++ *   - 单轮留底 → `turn.alts[]`（每条 {id, kind:"reroll"|"edit", role, content, ts}）。
++ *     重 roll 的旧稿挂到**这一轮的 user 轮**上（那条回复就是它的回复）；手改旧稿
++ *     挂到**被改的那条自己**身上。alts 只进界面、**不进模型上下文**（上下文
++ *     只读 t.content，见 offline.js 的 historyOf / turnsText），所以不会把
++ *     旧版本喂给模型造成剧情错乱。
++ *   - 删除留底 → story 级 `removed[]`（整条连 alts 一起搬进去 + removedAt），
++ *     因为删掉的轮次没有「本轮」可挂。
++ *   - 隐藏不产生版本：hidden 只是显示开关，内容一直躺在档里，没有东西会丢。
++ *   - 各设上限，防止无限膨胀把剧情文件撑爆。
++ */
++
++/** 一条轮次最多留几个历史版本（重 roll 通常滚两三次就定稿）。 */
++export const MAX_ALTS = 20;
++
++/** 一段剧情最多留几条「已删除」的轮次存档。 */
++export const MAX_REMOVED = 100;
++
+ /* ================= 路径 ================= */
+ 
+ /** key 合法才给路径，否则 null —— 挡 `../` 那一类。 */
+@@ -266,6 +286,21 @@
+       .filter((o) => o.trim())
+       .slice(0, CHOICE_COUNT),
+     hidden: Boolean(raw?.hidden),
++    // 历史版本（重 roll 旧稿 / 手改旧稿）。只给界面翻阅，不进模型上下文
++    alts: (Array.isArray(raw?.alts) ? raw.alts : [])
++      .map((a) =>
++        a && typeof a === "object"
++          ? {
++              id: str(a?.id) || newId("a"),
++              kind: a?.kind === "reroll" ? "reroll" : "edit",
++              role: a?.role === "user" ? "user" : "assistant",
++              content: clip(a?.content, MAX_TURN_CHARS),
++              ts: str(a?.ts) || new Date().toISOString(),
++            }
++          : null
++      )
++      .filter(Boolean)
++      .slice(-MAX_ALTS),
+     ts: str(raw?.ts) || new Date().toISOString(),
+   };
+ }
+@@ -283,6 +318,22 @@
+ }
+ 
+ function normalizeStory(raw, id) {
++  // ㉑-fix 迁移：旧版把重 roll 旧稿挂在 user 轮的 alts 上 —— 全部搬到它后面那条
++  // 助手轮上（旧稿本来就是那条回复的历史版本）。user 轮只留自己的手改历史，
++  // 不然 user 气泡上的「恢复」会把角色旧稿写进 user 正文（10-28 翻车现场）。
++  const turns = (Array.isArray(raw?.turns) ? raw.turns : []).map(normalizeTurn).slice(-MAX_TURNS);
++  for (let i = 0; i < turns.length; i++) {
++    const t = turns[i];
++    const reroll = (t.alts ?? []).filter((a) => a.kind === "reroll");
++    if (t.role !== "user" || !reroll.length) continue;
++    turns[i] = { ...t, alts: (t.alts ?? []).filter((a) => a.kind !== "reroll") };
++    for (let j = i + 1; j < turns.length; j++) {
++      if (turns[j].role === "assistant") {
++        turns[j] = { ...turns[j], alts: [...reroll, ...(turns[j].alts ?? [])].slice(-MAX_ALTS) };
++        break;
++      }
++    }
++  }
+   return {
+     id,
+     roleId: str(raw?.roleId),
+@@ -290,8 +341,31 @@
+     presetRef: str(raw?.presetRef),
+     startedAt: str(raw?.startedAt) || new Date().toISOString(),
+     endedAt: str(raw?.endedAt),
+-    turns: (Array.isArray(raw?.turns) ? raw.turns : []).map(normalizeTurn).slice(-MAX_TURNS),
++    turns,
++    // 重 roll 旧稿的暂存区：archiveLastAssistant 放进来，appendTurn 的助手轮接走
++    pendingAlts: (Array.isArray(raw?.pendingAlts) ? raw.pendingAlts : [])
++      .map((a) =>
++        a && typeof a === "object"
++          ? {
++              id: str(a?.id) || newId("a"),
++              kind: a?.kind === "reroll" ? "reroll" : "edit",
++              role: a?.role === "user" ? "user" : "assistant",
++              content: clip(a?.content, MAX_TURN_CHARS),
++              ts: str(a?.ts) || new Date().toISOString(),
++            }
++          : null
++      )
++      .filter(Boolean)
++      .slice(-MAX_ALTS),
+     summaries: (Array.isArray(raw?.summaries) ? raw.summaries : []).map(normalizeSummary),
++    // 删除轮次的存档区（整条连 alts 一起搬进来），界面上可以翻「删掉过的东西」
++    removed: (Array.isArray(raw?.removed) ? raw.removed : [])
++      .map((r) => {
++        if (!r || typeof r !== "object") return null;
++        return { ...normalizeTurn(r), removedAt: str(r?.removedAt) || new Date().toISOString() };
++      })
++      .filter(Boolean)
++      .slice(-MAX_REMOVED),
+   };
+ }
+ 
+@@ -469,7 +543,26 @@
+   const idx = readIndex(roleKey);
+   if (!idx.currentId) return null;
+   const one = normalizeTurn(turn);
+-  const story = patchStory(idx.currentId, (s) => ({ ...s, turns: [...s.turns, one] }));
++  const story = patchStory(idx.currentId, (s) => {
++    // ㉑-fix：重 roll 的旧稿暂存在 pendingAlts，重新生成的那条助手轮在这儿接走
++    if (one.role === "assistant" && (s.pendingAlts ?? []).length) {
++      const carried = (one.alts ?? []).concat(s.pendingAlts);
++      return {
++        ...s,
++        turns: [...s.turns, { ...one, alts: carried.slice(-MAX_ALTS) }],
++        pendingAlts: [],
++      };
++    }
++    // 重 roll 之后没等新回复、先发了新一句 ⇒ 这次重 roll 被放弃，旧稿进存档区，
++    // 不然会错挂到对新消息的回复上
++    if (one.role === "user" && (s.pendingAlts ?? []).length) {
++      const removed = (s.removed ?? []).concat(
++        s.pendingAlts.map((a) => ({ ...a, removedAt: new Date().toISOString() }))
++      );
++      return { ...s, turns: [...s.turns, one], pendingAlts: [], removed: removed.slice(-MAX_REMOVED) };
++    }
++    return { ...s, turns: [...s.turns, one] };
++  });
+   if (!story) return null;
+   syncStub(roleKey, story);
+   return one;
+@@ -487,45 +580,83 @@
+   if (!(readStory(storyId)?.turns ?? []).some((t) => t.id === turnId)) return null;
+   const story = patchStory(storyId, (s) => ({
+     ...s,
+-    turns: s.turns.map((t) =>
+-      t.id !== turnId
+-        ? t
+-        : {
+-            ...t,
+-            ...(patch?.content === undefined ? {} : { content: clip(patch.content, MAX_TURN_CHARS) }),
+-            ...(patch?.hidden === undefined ? {} : { hidden: Boolean(patch.hidden) }),
+-          }
+-    ),
++    turns: s.turns.map((t) => {
++      if (t.id !== turnId) return t;
++      const nextContent = patch?.content === undefined ? t.content : clip(patch.content, MAX_TURN_CHARS);
++      // 手改留底（补丁㉑）：正文真的变了才记，hidden 开关不产生版本
++      const changed = nextContent !== t.content;
++      return {
++        ...t,
++        ...(patch?.content === undefined ? {} : { content: nextContent }),
++        ...(patch?.hidden === undefined ? {} : { hidden: Boolean(patch.hidden) }),
++        ...(changed
++          ? {
++              alts: (t.alts ?? [])
++                .concat([
++                  {
++                    id: newId("a"),
++                    kind: "edit",
++                    role: t.role,
++                    content: t.content,
++                    ts: new Date().toISOString(),
++                  },
++                ])
++                .slice(-MAX_ALTS),
++            }
++          : {}),
++      };
++    }),
+   }));
+   if (story) syncStub(roleKey, story);
+   return story;
+ }
+ 
+ export function removeTurn(roleKey, storyId, turnId) {
+-  if (!(readStory(storyId)?.turns ?? []).some((t) => t.id === turnId)) return null;
++  const victim = (readStory(storyId)?.turns ?? []).find((t) => t.id === turnId);
++  if (!victim) return null;
+   const story = patchStory(storyId, (s) => ({
+     ...s,
+     turns: s.turns.filter((t) => t.id !== turnId),
++    // 删除留底（补丁㉑）：整条连 alts 一起搬进 removed 存档区，最多留 MAX_REMOVED 条
++    removed: (s.removed ?? [])
++      .concat([{ ...victim, removedAt: new Date().toISOString() }])
++      .slice(-MAX_REMOVED),
+   }));
+   if (story) syncStub(roleKey, story);
+   return story;
+ }
+ 
+ /**
+- * 重 roll 用：把末尾**连续的**助手轮次删掉，返回删了几条。
++ * 重 roll 用（补丁㉑改）：把末尾**连续的**助手轮次删掉，旧稿留底到这一轮的
++ * user 轮的 alts 里（kind="reroll"），返回删了几条。
+  *
+  * 连续地删是因为一轮可能落了不止一条（将来若要分段落盘）。用户那一句留着，
+  * 调用方按同一份上文再生成一次 —— 这就是「重 roll 这次回复」。
++ * 为什么挂到 user 轮：旧稿是新回复的「历史版本」，跟它回答的那句话绑定，
++ * 界面上在那条 user 气泡上就能翻「这条回复的历次版本」。
+  */
+-export function dropLastAssistant(roleKey, storyId) {
++export function archiveLastAssistant(roleKey, storyId) {
+   let dropped = 0;
+   const story = patchStory(storyId, (s) => {
+     const turns = [...s.turns];
++    const popped = [];
+     while (turns.length && turns[turns.length - 1].role === "assistant") {
+-      turns.pop();
++      popped.unshift(turns.pop());
+       dropped += 1;
+     }
+-    return { ...s, turns };
++    if (!popped.length) return s;
++    // 旧稿先进 story 级 pendingAlts 暂存；重新生成的那条助手轮 appendTurn 时接走。
++    // 🔴 绝不能挂到 user 轮上：user 气泡出现「恢复」按钮，一点就把角色旧稿
++    // 写进 user 正文（10-28 实际翻车：金智源的 333 字 prompt 被替换成 1.3 万字正文）。
++    const pending = (s.pendingAlts ?? []).concat(
++      // 连续重 roll 时，被砍的回复自己身上已经挂着更旧的历史版本 —— 一起带走，
++      // 旧的排前面（alts 是「它的历次版本」，比它正文更老）
++      popped.flatMap((d) => [
++        ...(d.alts ?? []),
++        { id: d.id, kind: "reroll", role: "assistant", content: d.content, ts: d.ts },
++      ])
++    );
++    return { ...s, turns, pendingAlts: pending.slice(-MAX_ALTS) };
+   });
+   if (story) syncStub(roleKey, story);
+   return dropped;

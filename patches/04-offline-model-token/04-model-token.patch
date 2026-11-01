@@ -1,0 +1,284 @@
+--- a/client/src/panels/offline.jsx
++++ b/client/src/panels/offline.jsx
+@@ -64,7 +64,7 @@
+ import { offlineMediaUrl } from "../offlinemedia.js";
+ import { useSection } from "../section.jsx";
+ import { api, apiStream, useConfig } from "../store.jsx";
+-import { Button, Card, Field, Modal, fmtStamp, inputCls } from "../ui.jsx";
++import { Button, Card, Field, Modal, fmtStamp, fmtTok, inputCls } from "../ui.jsx";
+ 
+ import { LastPromptBody, useLastPrompt } from "./context.jsx";
+ 
+@@ -941,6 +941,32 @@
+         >
+           <span className="text-eyebrow uppercase text-ink-faint">{name}</span>
+           {turn.ts && <span className="text-meta text-ink-meta">{fmtStamp(turn.ts)}</span>}
++          {/*
++            这一轮是谁生成的（服务端在 appendTurn 时记下的 endpoint.label）。
++            显示成「｜服务商 · 模型」，长标签直接截断、悬停看全称 —— 灰字小字，
++            不抢正文的注意力。老轮次没有 model 字段，这里就什么都不显示。
++          */}
++          {turn.model && (
++            <span
++              className="max-w-[15rem] truncate text-meta text-ink-faint"
++              title={`这一轮由 ${turn.model} 生成`}
++            >
++              ｜{turn.model}
++            </span>
++          )}
++          {turn.tokens && (
++            /*
++             * 这一轮的 token 用量（2026-11-01）。↑输入（括号里是缓存命中）
++             * ↓输出，悬停看精确数字。老轮次 / 上游没回 usage 的就不显示。
++             */
++            <span
++              className="text-meta text-ink-faint"
++              title={`输入 ${turn.tokens.in ?? 0} tokens（缓存命中 ${turn.tokens.cached ?? 0}）· 输出 ${turn.tokens.out ?? 0}`}
++            >
++              ｜↑{fmtTok(turn.tokens.in)}{turn.tokens.cached ? `(${fmtTok(turn.tokens.cached)})` : ""} ↓
++              {fmtTok(turn.tokens.out)}
++            </span>
++          )}
+           {turn.hidden && (
+             <span className="text-meta text-warn">已隐藏 · 不进下一轮的上下文</span>
+           )}
+@@ -1074,12 +1100,18 @@
+                 </span>
+                 <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words border-l border-line pl-2 text-meta leading-relaxed text-ink-soft">
+                   {v.ts && <span className="text-ink-faint">{fmtStamp(v.ts)}　</span>}
++                  {v.model && <span className="text-ink-faint">· {v.model}　</span>}
++                  {v.tokens && (
++                    <span className="text-ink-faint">
++                      · ↑{fmtTok(v.tokens.in)} ↓{fmtTok(v.tokens.out)}　
++                    </span>
++                  )}
+                   {v.content}
+                 </p>
+                 <button
+                   type="button"
+                   disabled={busy}
+-                  onClick={() => onRestore(turn.id, v.content)}
++                  onClick={() => onRestore(turn.id, v.content, v.model, v.tokens)}
+                   title="把这一版写回正文"
+                   className="rounded-item p-1 text-ink-faint transition-colors duration-150 hover:bg-paper hover:text-ink"
+                 >
+@@ -2424,12 +2456,13 @@
+    * 正文留底进 alts，所以来回切换不会丢任何一版。恢复前先收掉菜单和版本列表。
+    */
+   const restoreTurn = useCallback(
+-    (turnId, content) => {
++    (turnId, content, model, tokens) => {
+       setMenuKey("");
+       setAltsKey("");
+       run(`/turn/${encodeURIComponent(turnId)}`, {
+         method: "PATCH",
+-        body: { content, storyId: sid },
++        // model / tokens 都是「这一版」的属性：恢复哪版，标题就显示哪版的
++        body: { content, storyId: sid, model: model ?? "", tokens: tokens ?? null },
+       });
+     },
+     [run, sid]
+--- a/client/src/ui.jsx
++++ b/client/src/ui.jsx
+@@ -656,6 +656,16 @@
+   return sameDay ? `今天 ${hm}` : `${d.m}/${d.d} ${hm}`;
+ }
+ 
++/**
++ * token 数 → 「49.3k」这种（2026-11-01，气泡标题上显示用量用的）。
++ * 不足 1 万直接给整数，一万往上留一位小数 —— 和手机上那种用量显示一个路数。
++ */
++export function fmtTok(n) {
++  const v = Number(n) || 0;
++  if (v >= 10000) return `${(v / 1000).toFixed(1).replace(/\.0$/, "")}k`;
++  return String(v);
++}
++
+ export function NumberField({ label, value, min, max, step, onChange, hint, suffix }) {
+   return (
+     <Field label={label} hint={hint}>
+--- a/server/src/index.js
++++ b/server/src/index.js
+@@ -3863,6 +3863,10 @@
+     patch.content = content;
+   }
+   if (req.body?.hidden !== undefined) patch.hidden = Boolean(req.body.hidden);
++  // 恢复旧稿时把「这一版是谁写的」一起带回来，不然标签还挂着新版的模型
++  if (req.body?.model !== undefined) patch.model = String(req.body.model ?? "");
++  // 同上：token 用量也是「这一版」的属性，恢复哪版带哪版的
++  if (req.body?.tokens !== undefined) patch.tokens = req.body.tokens ?? null;
+   if (!Object.keys(patch).length) {
+     return res.status(400).json({ ok: false, error: "没有要改的内容" });
+   }
+--- a/server/src/llm.js
++++ b/server/src/llm.js
+@@ -1356,7 +1356,43 @@
+     usage ? `token 用量：${JSON.stringify(usage)}` : undefined
+   );
+ 
+-  return { content, toolCalls, toolsDropped };
++  /*
++   * 只留显示用的三件（2026-11-01，用户要在气泡旁看这一轮用了多少 token）。
++   * 原始 usage 里还有 audio / reasoning 一堆字段，存档里用不上，全存只会
++   * 把剧情文件撑大。流式那路 usage 挂在最后一个 chunk 上（include_usage），
++   * 有的源压根不给 —— 那这里就是 null，界面不显示，别的什么都不影响。
++   */
++  const tokens = normUsageTokens(usage);
++
++  return { content, toolCalls, toolsDropped, tokens, ms };
++}
++
++/**
++ * 三种 usage 形状都认（2026-11-01 晚补）：
++ *  - OpenAI：`prompt_tokens / completion_tokens / prompt_tokens_details.cached_tokens`
++ *  - Gemini 原生：`usageMetadata.promptTokenCount / candidatesTokenCount /
++ *    cachedContentTokenCount` —— Google V金走的就是这种，第一版只认 OpenAI
++ *    形状，V金那轮读出来全是 0，被存档层当「没数据」清掉了
++ *  - Claude：`input_tokens / output_tokens / cache_read_input_tokens`
++ * 读不出来的字段按 0 算，in/out 双 0 交给调用方当「没有」处理。
++ */
++function normUsageTokens(usage) {
++  if (!usage || typeof usage !== "object") return null;
++  const n = (v) => {
++    const x = Number(v);
++    return Number.isFinite(x) && x > 0 ? x : 0;
++  };
++  let inTok = n(usage.prompt_tokens) || n(usage.promptTokenCount) || n(usage.input_tokens);
++  let outTok =
++    n(usage.completion_tokens) ||
++    // 思考 token 也是输出的一部分（candidates 是正文）
++    n(usage.candidatesTokenCount) + n(usage.thoughtsTokenCount) ||
++    n(usage.output_tokens);
++  const cached =
++    n(usage.prompt_tokens_details?.cached_tokens) ||
++    n(usage.cachedContentTokenCount) ||
++    n(usage.cache_read_input_tokens);
++  return { in: inTok, out: outTok, cached };
+ }
+ 
+ /** 解析出来的 endpoint 够不够打一次请求。 */
+--- a/server/src/offline.js
++++ b/server/src/offline.js
+@@ -594,6 +594,7 @@
+ 
+   let reply;
+   let usedFallback = false;
++  let tokens = null;
+   try {
+     // params 用预设那一份：线下要的就是有变化，这是和协助模式最大的区别
+     const out = await chatWithFallback(endpoint, fallback, built.messages, built.params, {
+@@ -603,6 +604,9 @@
+     });
+     reply = out.content;
+     usedFallback = out.usedFallback;
++    // 这一轮的 token 用量（上游回的，llm.js 已剪成 in/out/cached 三件）。
++    // 走副 API 记副的那次用量 —— 和 model 记副的标签是同一个道理
++    tokens = out.tokens ?? null;
+   } catch (e) {
+     // 用户按的「停下」不是故障，日志里别报红
+     if (e?.aborted) logInfo(SCOPE, "线下这轮被用户按停了");
+@@ -640,6 +644,14 @@
+     role: "assistant",
+     content: cut.body,
+     options: cut.options,
++    /*
++     * 这一轮实际是谁生成的（2026-11-01，用户要在气泡旁边看到）。
++     * 走副 API 兜底的那轮记副的标签 —— 「为什么这轮风格不一样」才查得出来。
++     * 存的是 endpoint.label，也就是「服务商 · 模型」那种短串。
++     */
++    model: (usedFallback ? fallback?.label : endpoint?.label) ?? "",
++    // 这一轮的 token 用量（↑输入/↓输出/缓存），只在气泡标题上显示
++    tokens,
+   });
+   if (!turn) throw new Error("这轮回复存不下来（剧情文件写失败）");
+ 
+--- a/server/src/offlinestore.js
++++ b/server/src/offlinestore.js
+@@ -274,6 +274,21 @@
+ 
+ /* ================= 剧情正文 ================= */
+ 
++/*
++ * 这一轮的 token 用量（2026-11-01，llm.js 从上游 usage 里剪出来的三件）。
++ * 只给气泡标题显示用，不进上下文。老轮次没有 —— 界面就不显示；
++ * 有的源不给 usage（流式没带 include_usage 的），那也是 null。
++ */
++function normTokens(raw) {
++  if (!raw || typeof raw !== "object") return null;
++  const t = {
++    in: Math.max(0, Number(raw.in) || 0),
++    out: Math.max(0, Number(raw.out) || 0),
++    cached: Math.max(0, Number(raw.cached) || 0),
++  };
++  return t.in || t.out ? t : null;
++}
++
+ function normalizeTurn(raw) {
+   const id = str(raw?.id) || newId("t");
+   return {
+@@ -286,6 +301,15 @@
+       .filter((o) => o.trim())
+       .slice(0, CHOICE_COUNT),
+     hidden: Boolean(raw?.hidden),
++    /*
++     * 这一轮是哪个模型生成的（2026-11-01）。只给界面显示用：存的是
++     * 「服务商 · 模型」那种短标签（见 offline.js 里的 endpoint.label），
++     * 不进上下文、不参与任何判断。老轮次没有这个字段 —— 界面上就不显示。
++     * 副 API 兜底成功的那轮记的是**副的**标签，不然「为什么这轮风格不对」
++     * 永远查不出来。
++     */
++    model: str(raw?.model).slice(0, 120),
++    tokens: normTokens(raw?.tokens),
+     // 历史版本（重 roll 旧稿 / 手改旧稿）。只给界面翻阅，不进模型上下文
+     alts: (Array.isArray(raw?.alts) ? raw.alts : [])
+       .map((a) =>
+@@ -295,6 +319,9 @@
+               kind: a?.kind === "reroll" ? "reroll" : "edit",
+               role: a?.role === "user" ? "user" : "assistant",
+               content: clip(a?.content, MAX_TURN_CHARS),
++              // 旧稿也记模型：重 roll 之后能看出「这一版是谁写的」
++              model: str(a?.model).slice(0, 120),
++              tokens: normTokens(a?.tokens),
+               ts: str(a?.ts) || new Date().toISOString(),
+             }
+           : null
+@@ -351,6 +378,10 @@
+               kind: a?.kind === "reroll" ? "reroll" : "edit",
+               role: a?.role === "user" ? "user" : "assistant",
+               content: clip(a?.content, MAX_TURN_CHARS),
++              // 旧稿也记模型：重 roll 之后能看出「这一版是谁写的」
++              model: str(a?.model).slice(0, 120),
++              // 重 roll 暂存也要带用量 —— 掉了的话新轮接走的历史版本全是空
++              tokens: normTokens(a?.tokens),
+               ts: str(a?.ts) || new Date().toISOString(),
+             }
+           : null
+@@ -589,6 +620,10 @@
+         ...t,
+         ...(patch?.content === undefined ? {} : { content: nextContent }),
+         ...(patch?.hidden === undefined ? {} : { hidden: Boolean(patch.hidden) }),
++        // 恢复旧稿带回来的模型标签（见 index.js 那条 PATCH 的注释）
++        ...(patch?.model === undefined ? {} : { model: str(patch.model).slice(0, 120) }),
++        // 恢复旧稿连它的 token 用量一起带回来 —— 标题两行显示的是同一版的
++        ...(patch?.tokens === undefined ? {} : { tokens: normTokens(patch.tokens) }),
+         ...(changed
+           ? {
+               alts: (t.alts ?? [])
+@@ -598,6 +633,8 @@
+                     kind: "edit",
+                     role: t.role,
+                     content: t.content,
++                    model: t.model,
++                    tokens: t.tokens ?? null,
+                     ts: new Date().toISOString(),
+                   },
+                 ])
+@@ -653,7 +690,7 @@
+       // 旧的排前面（alts 是「它的历次版本」，比它正文更老）
+       popped.flatMap((d) => [
+         ...(d.alts ?? []),
+-        { id: d.id, kind: "reroll", role: "assistant", content: d.content, ts: d.ts },
++        { id: d.id, kind: "reroll", role: "assistant", content: d.content, model: d.model, tokens: d.tokens ?? null, ts: d.ts },
+       ])
+     );
+     return { ...s, turns, pendingAlts: pending.slice(-MAX_ALTS) };

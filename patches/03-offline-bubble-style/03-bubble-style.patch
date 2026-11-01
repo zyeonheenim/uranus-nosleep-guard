@@ -1,0 +1,604 @@
+--- a/client/src/panels/offline.jsx
++++ b/client/src/panels/offline.jsx
+@@ -47,6 +47,7 @@
+   History,
+   Loader2,
+   MoreHorizontal,
++  Palette,
+   Pencil,
+   Play,
+   Plus,
+@@ -70,7 +71,86 @@
+ /** 一轮正文的上限，和 server/src/offlinestore.js:MAX_TURN_CHARS 对齐。 */
+ const MAX_TURN_CHARS = 20000;
+ 
++/*
++ * ── 气泡外观（「样式」弹窗在管的东西）──
++ *
++ * 真值在服务端（data/offline-bubbles.json，见 server/src/bubblestyle.js），localStorage
++ * 只是「打开瞬间先画出来」的缓存 —— 不然会闪一下默认样式再变。
++ *
++ * 为什么不再只存本地：localStorage 按「设备 + 浏览器 + 地址」隔离。手机用
++ * `http://192.168.x.x:8787` 打开、电脑用 `http://127.0.0.1:8787`，连源站都不同，
++ * 所以手机上改完，电脑上永远还是旧的（用户报的就是这个）。现在两台设备读同一份。
++ *
++ * 也绝不能走 config.json 那条路（老坑：控制台页面一保存就把磁盘整包盖回去）。
++ *
++ * mode = "theme"：什么都不动，气泡保持主题本来的类名；"custom"：下面每侧的
++ * 颜色/边框/圆角以内联样式盖上去（内联样式天然压过 Tailwind 类，不用拆类名）。
++ * 分「用户 / 助手」两侧，因为它们本来底色就不同（sunken / paper）。
++ */
++const BUBBLE_STYLE_KEY = "uranus.offline.bubbles.v1";
++const BUBBLE_STYLE_API = "/api/offline-bubbles";
++
++const BUBBLE_SIDE_DEFAULTS = {
++  bg: "#ffffff", // 气泡底色
++  bgAlpha: 100, // 底色不透明度 %
++  border: "#d8d8d8", // 边框色（和主题 --line 同值）
++  borderAlpha: 100,
++  borderWidth: 1,
++  text: "#3f3f3f", // 正文颜色
++  radius: 12, // 圆角
++};
++
++const BUBBLE_STYLE_DEFAULTS = {
++  mode: "theme",
++  user: { ...BUBBLE_SIDE_DEFAULTS, bg: "#f4f4f5" }, // 你那侧默认就是 sunken 的值
++  assistant: { ...BUBBLE_SIDE_DEFAULTS },
++};
++
++/** 把「可能缺字段的旧数据」补齐成完整形状（服务端那份和本地缓存都走这里）。 */
++function mergeBubbleStyle(saved) {
++  const s = saved && typeof saved === "object" ? saved : {};
++  return {
++    ...BUBBLE_STYLE_DEFAULTS,
++    ...s,
++    user: { ...BUBBLE_STYLE_DEFAULTS.user, ...(s.user ?? {}) },
++    assistant: { ...BUBBLE_STYLE_DEFAULTS.assistant, ...(s.assistant ?? {}) },
++  };
++}
++
++function readBubbleStyle() {
++  try {
++    return mergeBubbleStyle(JSON.parse(localStorage.getItem(BUBBLE_STYLE_KEY) ?? ""));
++  } catch {
++    return BUBBLE_STYLE_DEFAULTS;
++  }
++}
++
++/** #rrggbb + 不透明度百分比 → css `rgb(r g b / a%)`；解析不了就原样返回。 */
++function bubbleRgba(hex, alphaPct) {
++  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? "").trim());
++  const pct = Math.max(0, Math.min(100, Number(alphaPct) || 0));
++  if (!m) return hex;
++  const n = parseInt(m[1], 16);
++  return `rgb(${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255} / ${pct}%)`;
++}
++
+ /**
++ * 自定义模式下那条气泡框的内联样式；theme 模式回 null —— 一个字都不盖，
++ * 换主题、换类名都不受影响，切回「跟随主题」和没做过这个功能一样。
++ */
++function bubbleBoxStyle(style, mine) {
++  if (!style || style.mode !== "custom") return null;
++  const s = mine ? style.user : style.assistant;
++  return {
++    backgroundColor: bubbleRgba(s.bg, s.bgAlpha),
++    borderColor: bubbleRgba(s.border, s.borderAlpha),
++    borderWidth: `${Number(s.borderWidth) || 0}px`,
++    borderRadius: `${Number(s.radius) || 0}px`,
++    color: s.text,
++  };
++}
++
++/**
+  * 一进来先画多少轮，以及每次往上看再补多少轮。
+  *
+  * 剧情是从上往下读的，真正在看的永远是末尾那几轮。但一条 HTML 回复就是一个
+@@ -820,6 +900,7 @@
+   altsOpen,
+   onAlts,
+   onRestore,
++  bubbleStyle,
+ }) {
+   /*
+    * 角色那侧先把没人接手的自造标记收掉（见 `offlinehtml.js:dropStray`）——
+@@ -843,6 +924,9 @@
+   const blocks = useMemo(() => (isHtml ? splitRich(text) : null), [isHtml, text]);
+   // ㉑ 这条轮的历史版本（重 roll 旧稿挂在 user 轮、手改旧稿挂在被改的那条自己身上）
+   const versions = turn.alts ?? [];
++  // 「样式」弹窗的自定义外观；theme 模式是 null，什么都不盖
++  const boxStyle = bubbleBoxStyle(bubbleStyle, mine);
++  // 正文颜色跟着气泡走（text-ink-soft 类会被内联 color 压过）
+   const textStyle = boxStyle ? { color: boxStyle.color } : undefined;
+ 
+   return (
+@@ -904,6 +988,7 @@
+           </div>
+         ) : (
+           <div
++            style={boxStyle ?? undefined}
+             className={`mt-1.5 border px-3.5 py-3 ${
+               /*
+                * 不带 widget 的那条按字数量宽（`w-fit`）。以前这儿是撑满整行的，
+@@ -926,6 +1011,7 @@
+                   b.kind === "text" ? (
+                     <p
+                       key={i}
++                      style={textStyle}
+                       className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft"
+                     >
+                       {spoken ? (
+@@ -954,7 +1040,7 @@
+                 )}
+               </div>
+             ) : spoken ? (
+-              <p className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft">
++              <p style={textStyle} className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft">
+                 <VoiceText
+                   roleKey={roleKey}
+                   turnId={turn.id}
+@@ -964,7 +1050,7 @@
+                 />
+               </p>
+             ) : (
+-              <p className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft">
++              <p style={textStyle} className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft">
+                 {text}
+               </p>
+             )}
+@@ -1207,6 +1293,196 @@
+  * 待总结 → 回归线上。所以要在按下去之前把这三件事说清楚，尤其是
+  * 「注进去的只有总结，原始的每一轮不进去」。
+  */
++/** 「样式」弹窗里的一行：标签 + 控件 + 当前值。 */
++function StyleRow({ label, value, children }) {
++  return (
++    <div className="flex items-center gap-3">
++      <span className="w-20 shrink-0 text-meta text-ink-meta">{label}</span>
++      <div className="min-w-0 flex-1">{children}</div>
++      {value != null && (
++        <span className="w-11 shrink-0 text-right text-meta text-ink-faint">{value}</span>
++      )}
++    </div>
++  );
++}
++
++/** 小色块：原生取色器，压成按钮大小。 */
++function ColorDot({ value, onChange, label }) {
++  return (
++    <input
++      type="color"
++      value={value}
++      aria-label={label}
++      onChange={(e) => onChange(e.target.value)}
++      className="h-7 w-10 cursor-pointer rounded-item border border-line bg-paper p-0.5"
++    />
++  );
++}
++
++/**
++ * 气泡外观弹窗。 Kelivo「消息样式」那个路子：上面预览实时跟着变，中间
++ * 「跟随主题 / 自定义」二选一，自定义里 用户/助手 分侧调（底色、不透明度、
++ * 边框三件套、文字色、圆角）。改完即时生效（onChange 直接写 state，防抖 400ms 推到
++ * 服务端，另一台设备打开时读同一份），没有「保存」这一步 —— 关掉就是存好了。
++ */
++function BubbleStyleDialog({ style, onChange, onClose }) {
++  const [side, setSide] = useState("assistant");
++  const custom = style.mode === "custom";
++  const s = style[side];
++  const set = (k, v) => onChange({ ...style, [side]: { ...s, [k]: v } });
++
++  /** 预览里的一条气泡：和正文 Bubble 同一个 style 来源，改到哪跟到哪。 */
++  const preview = (mine, text) => {
++    const st = bubbleBoxStyle(style, mine);
++    return (
++      <div className={`flex ${mine ? "justify-end" : ""}`}>
++        <div
++          style={st ?? undefined}
++          className={`w-fit max-w-[86%] border px-3 py-2 text-meta leading-relaxed ${
++            st ? "" : mine ? "border-line bg-sunken text-ink-soft" : "border-line bg-paper text-ink-soft"
++          }`}
++        >
++          {text}
++        </div>
++      </div>
++    );
++  };
++
++  return (
++    <Modal
++      title="气泡样式"
++      desc="线下剧情里气泡的外观 · 改了自动保存，手机和电脑是同一份"
++      onClose={onClose}
++      footer={
++        <>
++          <Button variant="ghost" onClick={() => onChange(BUBBLE_STYLE_DEFAULTS)}>
++            <RotateCcw size={14} /> 恢复默认
++          </Button>
++          <Button onClick={onClose}>
++            <Check size={14} /> 完成
++          </Button>
++        </>
++      }
++    >
++      <div className="grid grid-cols-1 gap-4">
++        {/* 实时预览：两条样例，custom 一改这里马上变 */}
++        <div className="grid grid-cols-1 gap-2.5 rounded-item border border-line bg-sunken px-3 py-3">
++          {preview(false, "「애기야, 手怎么这么凉。」他把外套往你肩上搭，「站这儿等多久了。」")}
++          {preview(true, "没多久。刚到。")}
++        </div>
++
++        {/* 模式：theme = 碰都不碰，custom = 下面这些生效 */}
++        <div className="flex items-center gap-2">
++          {[
++            { id: "theme", label: "跟随主题" },
++            { id: "custom", label: "自定义" },
++          ].map((t) => (
++            <button
++              key={t.id}
++              type="button"
++              onClick={() => onChange({ ...style, mode: t.id })}
++              className={`rounded-full border px-3 py-1 text-meta transition-colors duration-150 ${
++                style.mode === t.id
++                  ? "border-ink-soft bg-paper text-ink"
++                  : "border-line text-ink-meta hover:text-ink"
++              }`}
++            >
++              {t.label}
++            </button>
++          ))}
++          {!custom && (
++            <span className="text-meta text-ink-faint">气泡用控制台本来的样子</span>
++          )}
++        </div>
++
++        {/* 侧切换：你的话和角色的话各配一套 */}
++        <div className="flex items-center gap-2">
++          {[
++            { id: "user", label: "用户" },
++            { id: "assistant", label: "助手" },
++          ].map((t) => (
++            <button
++              key={t.id}
++              type="button"
++              onClick={() => setSide(t.id)}
++              className={`rounded-full border px-3 py-1 text-meta transition-colors duration-150 ${
++                side === t.id
++                  ? "border-ink-soft bg-paper text-ink"
++                  : "border-line text-ink-meta hover:text-ink"
++              }`}
++            >
++              {t.label}
++            </button>
++          ))}
++        </div>
++
++        {/* 控件：theme 模式下整体降透明并锁住，看得见但改不动 */}
++        <div
++          className={`grid grid-cols-1 gap-2.5 ${
++            custom ? "" : "pointer-events-none opacity-40"
++          }`}
++        >
++          <StyleRow label="背景颜色">
++            <ColorDot label="背景颜色" value={s.bg} onChange={(v) => set("bg", v)} />
++          </StyleRow>
++          <StyleRow label="背景不透明度" value={`${s.bgAlpha}%`}>
++            <input
++              type="range"
++              min="0"
++              max="100"
++              value={s.bgAlpha}
++              onChange={(e) => set("bgAlpha", Number(e.target.value))}
++              className="w-full accent-ink"
++            />
++          </StyleRow>
++          <StyleRow label="边框颜色">
++            <ColorDot label="边框颜色" value={s.border} onChange={(v) => set("border", v)} />
++          </StyleRow>
++          <StyleRow label="边框不透明度" value={`${s.borderAlpha}%`}>
++            <input
++              type="range"
++              min="0"
++              max="100"
++              value={s.borderAlpha}
++              onChange={(e) => set("borderAlpha", Number(e.target.value))}
++              className="w-full accent-ink"
++            />
++          </StyleRow>
++          <StyleRow label="边框宽度" value={Number(s.borderWidth).toFixed(1)}>
++            <input
++              type="range"
++              min="0"
++              max="3"
++              step="0.1"
++              value={s.borderWidth}
++              onChange={(e) => set("borderWidth", Number(e.target.value))}
++              className="w-full accent-ink"
++            />
++          </StyleRow>
++          <StyleRow label="文字颜色">
++            <ColorDot label="文字颜色" value={s.text} onChange={(v) => set("text", v)} />
++          </StyleRow>
++          <StyleRow label="圆角半径" value={s.radius}>
++            <input
++              type="range"
++              min="0"
++              max="24"
++              value={s.radius}
++              onChange={(e) => set("radius", Number(e.target.value))}
++              className="w-full accent-ink"
++            />
++          </StyleRow>
++        </div>
++
++        <p className="text-meta leading-relaxed text-ink-faint">
++          改完即时生效，没有保存按钮——关掉就是存好了。「恢复默认」回到跟随主题
++          ，和你没用过这个弹窗时一模一样。
++        </p>
++      </div>
++    </Modal>
++  );
++}
++
+ function CloseDialog({ roleName, busy, inject, onInject, onClose, onConfirm }) {
+   return (
+     <Modal
+@@ -1477,6 +1753,56 @@
+   const [manual, setManual] = useState("");
+   const [showSummary, setShowSummary] = useState(false);
+   const [showPrompt, setShowPrompt] = useState(false);
++  // 气泡外观（「样式」弹窗管的那套）。先用本地缓存画，打开后以服务端那份为准
++  const [bubbleStyle, setBubbleStyle] = useState(readBubbleStyle);
++  const [showStyle, setShowStyle] = useState(false);
++  /*
++   * 服务端那份读回来了没有。读回来之前不许往上传 —— 不然会把「本地旧值」推上去，
++   * 反过来把另一台设备刚改好的盖掉。
++   */
++  const [styleSynced, setStyleSynced] = useState(false);
++  // 服务端原本有没有存过东西。没存过且本地也是默认值，就不必写一个空文件上去
++  const serverHadStyle = useRef(false);
++
++  useEffect(() => {
++    let alive = true;
++    api(BUBBLE_STYLE_API)
++      .then((r) => {
++        if (!alive) return;
++        if (r?.style) {
++          serverHadStyle.current = true;
++          setBubbleStyle(mergeBubbleStyle(r.style));
++        }
++        // 服务端是空的：下面那个 effect 会把本地这份推上去（第一次迁移到服务端）
++        setStyleSynced(true);
++      })
++      .catch(() => {
++        // 后端还没有这个接口（旧版本 / 小手机那套）→ 退回纯本地，一样能用
++        if (alive) setStyleSynced(true);
++      });
++    return () => {
++      alive = false;
++    };
++  }, []);
++
++  useEffect(() => {
++    try {
++      localStorage.setItem(BUBBLE_STYLE_KEY, JSON.stringify(bubbleStyle));
++    } catch {
++      /* 隐私模式存不进去就算了，本次会话内照样生效 */
++    }
++    if (!styleSynced) return undefined;
++    // 服务端本来就空、这次也只是默认值 → 不值得为此建个文件
++    if (!serverHadStyle.current && bubbleStyle.mode !== "custom") return undefined;
++    // 拖颜色滑块时会连着改十几次，攒一下再发
++    const t = setTimeout(() => {
++      serverHadStyle.current = true;
++      api(BUBBLE_STYLE_API, { method: "PUT", body: { style: bubbleStyle } }).catch(() => {
++        /* 推不上去就算了：本地还在，下次改再试 */
++      });
++    }, 400);
++    return () => clearTimeout(t);
++  }, [bubbleStyle, styleSynced]);
+   // 往上补了多少轮（只算「更早的那批」，不含 SHOW_TURNS 那份基数）
+   const [loadedMore, setLoadedMore] = useState(0);
+   // 折起来那几轮（已经换成总结的）现在展开着没有
+@@ -2259,6 +2585,9 @@
+                     <Button variant="ghost" onClick={() => setShowPrompt(true)}>
+                       <FileText size={14} /> 提示词
+                     </Button>
++                    <Button variant="ghost" onClick={() => setShowStyle(true)}>
++                      <Palette size={14} /> 样式
++                    </Button>
+                   </div>
+                 </div>
+ 
+@@ -2431,6 +2760,7 @@
+                         altsOpen={altsKey === t.id}
+                         onAlts={setAltsKey}
+                         onRestore={restoreTurn}
++                        bubbleStyle={bubbleStyle}
+                         roleKey={itemId}
+                         auto={turnAuto && lastAssistant?.id === t.id}
+                         onVoiceError={voiceError}
+@@ -2499,8 +2829,18 @@
+                           <span className="text-eyebrow uppercase text-ink-faint">{userName}</span>
+                           <span className="text-meta text-ink-meta">发出去了</span>
+                         </div>
+-                        <div className="mt-1.5 ml-auto w-fit max-w-[34rem] border border-line bg-sunken px-3.5 py-3">
+-                          <p className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft">
++                        <div
++                          style={bubbleBoxStyle(bubbleStyle, true) ?? undefined}
++                          className="mt-1.5 ml-auto w-fit max-w-[34rem] border border-line bg-sunken px-3.5 py-3"
++                        >
++                          <p
++                            style={
++                              bubbleBoxStyle(bubbleStyle, true)
++                                ? { color: bubbleBoxStyle(bubbleStyle, true).color }
++                                : undefined
++                            }
++                            className="whitespace-pre-wrap break-words text-ui leading-relaxed text-ink-soft"
++                          >
+                             {pending}
+                           </p>
+                         </div>
+@@ -2524,8 +2864,18 @@
+                           <span className="text-eyebrow uppercase text-ink-faint">{roleName}</span>
+                           <span className="text-meta text-ink-meta">正在写…</span>
+                         </div>
+-                        <div className="mt-1.5 w-fit border border-line bg-sunken px-3.5 py-3">
+-                          <p className="whitespace-pre-wrap text-body leading-relaxed text-ink-soft">
++                        <div
++                          style={bubbleBoxStyle(bubbleStyle, false) ?? undefined}
++                          className="mt-1.5 w-fit border border-line bg-sunken px-3.5 py-3"
++                        >
++                          <p
++                            style={
++                              bubbleBoxStyle(bubbleStyle, false)
++                                ? { color: bubbleBoxStyle(bubbleStyle, false).color }
++                                : undefined
++                            }
++                            className="whitespace-pre-wrap text-body leading-relaxed text-ink-soft"
++                          >
+                             {streaming}
+                             <span className="ml-0.5 animate-pulse text-ink-faint">▍</span>
+                           </p>
+@@ -2604,6 +2954,13 @@
+       )}
+ 
+       {showPrompt && <PromptDialog onClose={() => setShowPrompt(false)} />}
++      {showStyle && (
++        <BubbleStyleDialog
++          style={bubbleStyle}
++          onChange={setBubbleStyle}
++          onClose={() => setShowStyle(false)}
++        />
++      )}
+ 
+       {closing && state && (
+         <CloseDialog
+--- a/server/src/bubblestyle.js
++++ b/server/src/bubblestyle.js
+@@ -0,0 +1,105 @@
++/**
++ * 线下剧情的「气泡样式」（面板里那个「样式」弹窗）。
++ *
++ * 为什么搬到服务端：以前只存 localStorage，结果是**手机上改完，电脑上还是旧的**。
++ * localStorage 按「设备 + 浏览器 + 地址」隔离 —— 手机多半是 `http://192.168.x.x:8787`
++ * 打开、电脑是 `http://127.0.0.1:8787`，连源站都不是同一个，永远不会互相看见。
++ * 现在真值在这里（data/offline-bubbles.json），localStorage 只剩「打开瞬间先画出来」的缓存。
++ *
++ * 为什么不进 config.json：那边是「草稿 + 点保存」，一保存会把磁盘上的配置整包盖回去
++ * （老坑，踩过十几次）；气泡样式是「改一下就想立刻看到」的偏好，不该走那条路。
++ *
++ * 也不进云备份的「配置」：它不影响聊天内容，换机器重新调一次就行。
++ */
++
++import path from "node:path";
++
++import { DATA_DIR, readJson, writeJson } from "./datadir.js";
++
++const FILE = path.join(DATA_DIR, "offline-bubbles.json");
++
++/** 一份就这么点东西，正常不到 1 KB；给到 20 KB 是防着被塞奇怪的东西。 */
++const MAX_CHARS = 20_000;
++
++/** 和 offline.jsx:BUBBLE_SIDE_DEFAULTS 对齐。缺字段就用这里的，参数越界就夹回来。 */
++const SIDE_DEFAULTS = {
++  bg: "#ffffff",
++  bgAlpha: 100,
++  border: "#d8d8d8",
++  borderAlpha: 100,
++  borderWidth: 1,
++  text: "#3f3f3f",
++  radius: 12,
++};
++
++function hex(v, fallback) {
++  const s = String(v ?? "").trim();
++  if (!/^#[0-9a-f]{6}$/i.test(s)) return fallback;
++  // 统一小写，免得 `#FFFFFF` 和 `#ffffff` 被当成两次不同的改动
++  return s.toLowerCase();
++}
++
++function num(v, min, max, fallback) {
++  const n = Number(v);
++  if (!Number.isFinite(n)) return fallback;
++  return Math.min(max, Math.max(min, Math.round(n)));
++}
++
++function side(raw) {
++  const s = raw && typeof raw === "object" ? raw : {};
++  return {
++    bg: hex(s.bg, SIDE_DEFAULTS.bg),
++    bgAlpha: num(s.bgAlpha, 0, 100, SIDE_DEFAULTS.bgAlpha),
++    border: hex(s.border, SIDE_DEFAULTS.border),
++    borderAlpha: num(s.borderAlpha, 0, 100, SIDE_DEFAULTS.borderAlpha),
++    borderWidth: num(s.borderWidth, 0, 12, SIDE_DEFAULTS.borderWidth),
++    text: hex(s.text, SIDE_DEFAULTS.text),
++    radius: num(s.radius, 0, 40, SIDE_DEFAULTS.radius),
++  };
++}
++
++/**
++ * 只留这三个字段，其余一律丢掉。
++ *
++ * 前端会把整份对象原样 PUT 回来，里面可能带着上一版字段名或者别人手改的垃圾；
++ * 与其存进去以后再让界面去猜，不如在门口裁干净。
++ */
++export function sanitizeBubbleStyle(raw) {
++  const s = raw && typeof raw === "object" ? raw : {};
++  return {
++    mode: s.mode === "custom" ? "custom" : "theme",
++    user: side(s.user),
++    assistant: side(s.assistant),
++  };
++}
++
++/** 读一份。没有就是 `{ style: null }` —— 前端靠这个判断「要不要把本地那份推上来」。 */
++export function readBubbleStyle() {
++  const raw = readJson(FILE, null);
++  const style = raw && typeof raw === "object" ? raw.style : null;
++  if (!style || typeof style !== "object") return { style: null, updatedAt: null };
++  return { style: sanitizeBubbleStyle(style), updatedAt: Number(raw.updatedAt) || null };
++}
++
++export function mountBubbleStyle(app) {
++  app.get("/api/offline-bubbles", (_req, res) => res.json(readBubbleStyle()));
++
++  app.put("/api/offline-bubbles", (req, res) => {
++    const body = req.body ?? {};
++    if (!body.style || typeof body.style !== "object") {
++      return res.status(400).json({ error: "没有样式内容" });
++    }
++    let size = 0;
++    try {
++      size = JSON.stringify(body.style).length;
++    } catch {
++      return res.status(400).json({ error: "样式内容看不懂" });
++    }
++    if (size > MAX_CHARS) {
++      return res.status(400).json({ error: `样式内容太长了（${size} 字，上限 ${MAX_CHARS}）` });
++    }
++    const next = { style: sanitizeBubbleStyle(body.style), updatedAt: Date.now() };
++    writeJson(FILE, next);
++    res.json(next);
++  });
++}
+--- a/server/src/index.js
++++ b/server/src/index.js
+@@ -96,6 +96,7 @@
+ import { syncCallTunnel } from "./calltunnel.js";
+ import { endCall, markConnected } from "./callsession.js";
+ import { mountCustomCss } from "./customcss.js";
++import { mountBubbleStyle } from "./bubblestyle.js";
+ import {
+   assistantGreeting,
+   buildAssistantMessages,
+@@ -1375,6 +1376,8 @@
+ mountReminders(app, loadConfig);
+ // 控制台 / 查手机的自定义 CSS（data/custom-css.json，不走 /api/config）
+ mountCustomCss(app);
++// 线下剧情的气泡样式（data/offline-bubbles.json，不走 /api/config，见 bubblestyle.js）
++mountBubbleStyle(app);
+ /*
+  * FaceTime 通话（见 callapi.js）。
+  *

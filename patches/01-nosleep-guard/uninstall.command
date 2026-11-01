@@ -5,6 +5,11 @@
 
 set -u
 
+# --yes：给统一卸载器（node uninstall.mjs）调的时候用
+YES=0
+[ "${1:-}" = "--yes" ] && YES=1
+pause() { [ "$YES" = 1 ] || read -r -p "$1" _; }
+
 LABEL="com.uranus.wake-restart"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$(id -u)"
@@ -26,4 +31,4 @@ echo ""
 echo "注：如果之前手动执行过 sudo pmset -a sleep 0，电源设置不会被这里改回。"
 echo "    要恢复默认睡眠，执行：sudo pmset -a sleep 1"
 echo ""
-read -r -p "按回车关闭…"
+pause "按回车关闭…"

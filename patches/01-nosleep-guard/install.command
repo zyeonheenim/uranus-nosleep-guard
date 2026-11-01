@@ -17,6 +17,11 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 
+# --yes：给统一安装器（node install.mjs）调的时候用，不等人按键
+YES=0
+[ "${1:-}" = "--yes" ] && YES=1
+pause() { [ "$YES" = 1 ] || read -r -p "$1" _; }
+
 HOME_DIR="$HOME"
 LABEL="com.uranus.wake-restart"
 PLIST="$HOME_DIR/Library/LaunchAgents/$LABEL.plist"
@@ -34,13 +39,13 @@ echo ""
 if [ ! -d "$HOME_DIR/Uranus_Imessage" ]; then
   echo "❌ 没找到 $HOME_DIR/Uranus_Imessage"
   echo "   请把 Uranus 装在用户主目录下，或改好路径再运行。"
-  read -r -p "按回车退出…"
+  pause "按回车退出…"
   exit 1
 fi
 
 if [ ! -f "$SRC" ]; then
   echo "❌ 同目录下缺少 files/uranus-wake-restart.sh"
-  read -r -p "按回车退出…"
+  pause "按回车退出…"
   exit 1
 fi
 
@@ -116,4 +121,4 @@ echo "   sudo pmset -a sleep 0"
 echo "   注意：系统大版本更新后会重置，需要重跑一次。"
 echo "=========================================="
 echo ""
-read -r -p "安装完成，按回车关闭…"
+pause "安装完成，按回车关闭…"

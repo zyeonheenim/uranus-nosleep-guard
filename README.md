@@ -1,188 +1,282 @@
-# uranus-nosleep-guard
+# uranus_patches_awesome
 
-![Platform](https://img.shields.io/badge/platform-macOS-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Dependencies](https://img.shields.io/badge/deps-none-brightgreen)
+![Base](https://img.shields.io/badge/Uranus-1.22.3-blue)
+![Patches](https://img.shields.io/badge/patches-4-orange)
 
-**Mac 睡一觉醒来，Uranus 还活着，但网络栈已经被休眠挂死了 —— 这个补丁让它自动恢复。**
+**给 [Uranus](https://github.com/nikonotnicotine/Uranus_Imessage) 用的一组补丁。一个补丁只干一件事，装之前自动备份，装坏了能一键退回。**
 
-Uranus 睡醒后常常「假活」：8787 端口照常监听、进程也在、控制台打得开，
-但所有出网请求全部超时（`ENOTFOUND` / `UND_ERR_CONNECT_TIMEOUT`），
-于是 iMessage 不回消息、IG 不动、定时主动发信不发。
-本工具检测到这种情况后**只重启一次 Uranus**，把卡死的网络栈换掉。
+这里的四个补丁都来自真实使用中的痛点，不是「看起来会很酷」的功能：
 
-- ✅ 不禁用系统睡眠
-- ✅ 不 `pkill`、不轮询拨号
-- ✅ 不额外耗电（5 分钟看一次，几毫秒结束）
-- ✅ 纯系统自带命令，零依赖
-- ✅ 只在「真的需要」时动手，平时完全静默
+| # | 补丁 | 治什么 | 类型 |
+|---|---|---|---|
+| 01 | [唤醒防断流](#01--唤醒防断流-nosleep-guard) | Mac 睡一觉醒来，Uranus 还活着但出网全废（`ENOTFOUND`），角色不回消息 | 独立脚本，**不改 Uranus 代码** |
+| 02 | [线下剧情 · 版本留底](#02--线下剧情--版本留底-version-history) | 重 roll 之后旧稿没了，手改之后原句没了，删错了找不回来 | 代码补丁（1.22.3） |
+| 03 | [线下剧情 · 气泡样式](#03--线下剧情--气泡样式-bubble-style) | 手机上调好的气泡配色，电脑上不生效（localStorage 按源站隔离） | 代码补丁（1.22.3） |
+| 04 | [线下剧情 · 模型与 token](#04--线下剧情--模型与-token-model--token) | 不知道这一轮是哪条线生成的、花了多少 token、是不是偷偷用了兜底 | 代码补丁（1.22.3） |
 
-> 📖 **完整用户指导（安装每一步、验证、调参、排错手册）见 [USAGE.md](USAGE.md)。**
+> 02 / 03 / 04 是同一个组件（线下剧情气泡）上的三个功能，所以它们**按 02 → 03 → 04 叠加**。
+> 只装到 02 是完整可用的（纯版本留底）；想只要气泡样式就得连 02 一起装 —— 原因见 [docs/install.md](docs/install.md#为什么-020304-要叠着装)。
 
 ---
 
 ## 目录
 
-- [一、它到底解决什么](#一它到底解决什么)
-- [二、判据（怎么决定要不要重启）](#二判据脚本怎么决定要不要重启)
-- [三、安装](#三安装)
-- [四、卸载](#四卸载)
-- [五、可选：彻底禁止整机睡眠](#五可选彻底禁止整机睡眠)
-- [六、可调参数](#六可调参数)
-- [七、为什么不用「杀进程重拨」那种看门狗](#七为什么不用杀进程重拨那种看门狗)
-- [八、兼容性](#八兼容性)
-- [九、和 Uranus 的关系](#九和-uranus-的关系)
-- [English quick start](#english-quick-start)
+- [快速开始](#快速开始)
+- [补丁清单](#补丁清单)
+- [01 · 唤醒防断流](#01--唤醒防断流-nosleep-guard)
+- [02 · 线下剧情 · 版本留底](#02--线下剧情--版本留底-version-history)
+- [03 · 线下剧情 · 气泡样式](#03--线下剧情--气泡样式-bubble-style)
+- [04 · 线下剧情 · 模型与 token](#04--线下剧情--模型与-token-model--token)
+- [安装器怎么用](#安装器怎么用)
+- [卸载 / 回退](#卸载--回退)
+- [Uranus 升级之后](#uranus-升级之后)
+- [兼容性与已知限制](#兼容性与已知限制)
+- [目录结构](#目录结构)
+- [为什么不直接用 git patch](#为什么不直接用-git-patch)
+- [English](#english)
 
 ---
 
-## 一、它到底解决什么
-
-| 症状 | 是不是它管 |
-|---|---|
-| 睡醒后 Uranus 全链路超时（`ENOTFOUND` 一片） | ✅ 正是 |
-| 隔天早上发现角色一夜没回消息 | ✅ 多半是 |
-| `Connection dropped` 刷屏 | ❌ 那是 iMessage 投票流，与睡眠无关 |
-| 进程直接死了 | ❌ 那是 launchd `KeepAlive` 的活，本补丁不插手 |
-
-## 二、判据（脚本怎么决定要不要重启）
-
-每 5 分钟跑一次，三个条件**同时**满足才重启：
-
-1. **8787 有进程在监听**（没监听就交给 `KeepAlive` 自己拉，脚本不管）；
-2. **这个进程的启动时间 < 最近一次「真正的唤醒」时间**
-   —— 即进程是在睡觉之前就起来的，网络栈是旧的；
-   - 唤醒时间取自 `pmset -g log`，**排除 `DarkWake` / `Maintenance`**（后台维护唤醒很频繁，不算）；
-3. **已经唤醒超过 90 秒**（`WAKE_GRACE`）—— 避开刚唤醒的网络抖动，也避免重复重启。
-
-拿到进程启动时间用 `ps lstart`，拿不到就回退 `etime`；
-两者都拿不到时**保守跳过、不盲重启**。
-
-## 三、安装
-
-**方式 A（推荐）**：双击 `install.command`
-
-**方式 B（终端）**：
+## 快速开始
 
 ```bash
-cd 本目录
-chmod +x install.command
-./install.command
+git clone https://github.com/zyeonheenim/uranus_patches_awesome.git
+cd uranus_patches_awesome
+
+node install.mjs                 # 先看：会改哪些文件（不写盘）
+node install.mjs --all --run     # 真的装（01 + 02 + 03 + 04）
 ```
 
-装完验证：
+只想装其中一个：
 
 ```bash
-launchctl print gui/$(id -u)/com.uranus.wake-restart
-# 有输出 = 在跑
+node install.mjs --only 02 --run          # 只装「版本留底」
+node install.mjs --only 02,03 --run       # 版本留底 + 气泡样式
+node install.mjs --only 01 --run          # 只装唤醒防断流
 ```
 
-日志在 `~/Uranus_Imessage/uranus-wake-restart.log`。
-**平时是空的＝正常**，只有真的重启过才会写一行：
+装完两件事：**重启 Uranus**、浏览器 **Cmd+R**（前端有缓存）。
 
-```
-2026-10-23 08:12:03 RESTART pid=1234 (启动于 2026-10-22 23:41:09，早于最近唤醒 …；已唤醒 210s)
-```
-
-## 四、卸载
-
-双击 `uninstall.command`。只删这个定时任务，**不动 Uranus 主服务**。
-
-## 五、可选：彻底禁止整机睡眠
-
-补丁是「睡醒后自愈」。如果你**根本不想让它睡**（比如 24 小时开机挂角色）：
+Uranus 装在哪？安装器会自己找（当前目录 / 上一层 / `~/Uranus_Imessage`）。找不到就指定：
 
 ```bash
-sudo pmset -a sleep 0     # 禁止整机睡眠（要输开机密码）
-pmset -g custom | grep sleep   # 确认 sleep 是 0
-sudo pmset -a sleep 1     # 想改回来
+URANUS_DIR=/path/to/Uranus_Imessage node install.mjs --all --run
 ```
-
-⚠️ 注意两点：
-
-- **macOS 大版本更新后会把它重置**，更新完记得重跑一次；
-- 只锁屏幕不睡（合盖/电源键仍会睡）的话，这个补丁依然有用，建议**两个都留着**。
-- 屏幕可以照常关（不影响）：
-  ```bash
-  sudo pmset -a displaysleep 10   # 10 分钟后只关屏，机器不睡
-  ```
-
-## 六、可调参数
-
-都在脚本顶部：
-
-```bash
-PORT=8787            # Uranus 端口
-URANUS_LABEL="com.uranus.imessage"   # launchd 服务名
-WAKE_GRACE=90        # 唤醒后至少等多少秒再重启
-```
-
-检查频率在 plist 里：`StartInterval = 300`（5 分钟）。
-
-## 七、为什么不用「杀进程重拨代理」那种看门狗
-
-曾经做过一个「代理端口不通就 `pkill` 重开」的看门狗，
-结果两份看门狗互相 kill + 反复重拨，导致代理**每 15 秒重启一次**的死循环。
-
-本补丁刻意避开了那条路：
-
-- 只调 `launchctl kickstart`（优雅重启），不 `pkill`；
-- 每 5 分钟才看一次，且有 90 秒冷静期；
-- 判定条件严格（进程比唤醒还老），不会误伤正常运行的实例。
-
-## 八、兼容性
-
-- macOS（LaunchAgents / `pmset` / `ps` BSD 语法）；脚本只用系统自带命令，无需装任何东西。
-- 依赖 Uranus 由 launchd 托管（服务名 `com.uranus.imessage`）；
-  如果你是手动 `node` 起的，脚本里的 `kickstart` 会失败，需要改成你自己的启动方式。
-- 不含任何个人数据，可自由分享/改造。
 
 ---
 
-## 九、和 Uranus 的关系
+## 补丁清单
 
-这是一个**第三方小工具**，不是 Uranus 的一部分，也不修改 Uranus 的任何代码。
-它只是在旁边盯着：Mac 睡醒后如果发现 Uranus 是「睡觉之前就启动的」，就调
-`launchctl kickstart` 帮它重启一次。
+### 01 · 唤醒防断流 (nosleep-guard)
 
-Uranus 本体另有其自己的使用许可；本仓库只包含这个独立脚本，**不受那份许可约束**。
+**症状**：Mac 合盖睡一晚，早上打开 —— Uranus 进程在、8787 端口在监听、控制台能开，
+但所有出网请求超时（`ENOTFOUND` / `UND_ERR_CONNECT_TIMEOUT`），iMessage 不回、IG 不动、定时发信不发。
+这是「进程活着，网络栈被休眠挂死了」。
+
+**做法**：launchd 每 5 分钟看一次。三个条件**同时**满足才重启一次 Uranus：
+
+1. 8787 有进程在监听（没监听就交给 Uranus 自己的 `KeepAlive`，脚本不插手）；
+2. **进程启动时间早于最近一次真正的唤醒**（`pmset -g log`，排除 `DarkWake` / `Maintenance`）；
+3. 已唤醒超过 90 秒（避开唤醒瞬间的网络抖动）。
+
+- 不禁用系统睡眠、不 `pkill`、不轮询拨号、零依赖（只用 macOS 自带命令）
+- 平时完全静默，日志只有真的重启过才会写一行
+- 📖 详细说明：[patches/01-nosleep-guard/README.md](patches/01-nosleep-guard/README.md) ｜ 手把手指南：[USAGE.md](patches/01-nosleep-guard/USAGE.md)
+
+```bash
+# 也可以单独双击装（不装另外三个）
+patches/01-nosleep-guard/install.command
+```
 
 ---
 
-## English (quick start)
+### 02 · 线下剧情 · 版本留底 (version-history)
 
-A tiny macOS helper for [Uranus](https://github.com/nikonotnicotine/Uranus_Imessage) users.
+重 roll 是日常操作，但 Uranus 原版是**直接删**：一按重 roll，上一版正文就没了。
+手改也是原地覆盖，改完想找回原句只能翻记忆库里残缺的总结。
 
-**Problem:** after your Mac wakes from sleep, Uranus is still running (port 8787 listens)
-but its network stack is dead — every outbound request times out (`ENOTFOUND`,
-`UND_ERR_CONNECT_TIMEOUT`), so iMessage stops replying and scheduled messages never fire.
+装上之后：
 
-**Fix:** every 5 minutes this job checks whether the Uranus process was started
-*before* the last real wake. If so (and it's been awake > 90s), it runs
-`launchctl kickstart` once to restart Uranus.
+- 重 roll 的旧稿、手改前的旧稿、被删掉的整轮 —— **都留底**
+- 气泡标题多一个 `历史 3` 小按钮，点开是这一轮的全部旧版本，`⟲` 一键写回正文
+- 恢复时**当前版本也会先留底**，来回切不丢任何一版
+- 历史版本只给界面看，**不进模型上下文**（不会因为翻旧稿让剧情错乱）
+- 每条轮次最多留 20 版，每段剧情最多留 100 条已删除轮次（有上限，文件不会无限膨胀）
 
-It does **not** disable sleep, does **not** `pkill` anything, and uses only built-in
-macOS commands.
+📖 [patches/02-offline-version-history/README.md](patches/02-offline-version-history/README.md)
 
-```bash
-# install: double-click install.command, or:
-chmod +x install.command && ./install.command
+---
 
-# verify
-launchctl print gui/$(id -u)/com.uranus.wake-restart
+### 03 · 线下剧情 · 气泡样式 (bubble-style)
 
-# uninstall: double-click uninstall.command
+Uranus 原版的气泡样式只能改主题，改不了「我这侧浅灰、他那侧米白、圆角 18、边框淡一点」。
+
+装上之后：线下页顶部多一个 **样式** 按钮 —— 上方实时预览，`跟随主题 / 自定义` 二选一，
+自定义里 **用户侧 / 助手侧分别** 调底色、底色不透明度、边框色、边框不透明度、边框宽度、文字色、圆角。
+改完即时生效，没有「保存」按钮，关掉就是存好了。
+
+关键点：**样式存在服务端**（`data/offline-bubbles.json`，走 `/api/offline-bubbles`），
+不是只塞在浏览器里 —— 因为 localStorage 按「设备 + 浏览器 + 源站」隔离，
+手机用 `http://192.168.x.x:8787`、电脑用 `http://127.0.0.1:8787` 打开时**永远是两份**，
+所以手机上调完电脑上不变。现在两台设备读同一份。
+
+📖 [patches/03-offline-bubble-style/README.md](patches/03-offline-bubble-style/README.md)
+
+---
+
+### 04 · 线下剧情 · 模型与 token (model / token)
+
+一个角色配了主 API + 兜底 API，出问题时最想知道的就是：**这一轮到底是谁写的、花了多少。**
+
+装上之后气泡标题变成：
+
+```
+郑成灿  今天 19:24  ｜小鸡农场 · [Build][抗截断] gemini-3.8-flash  ｜↑49.3k(46k) ↓189
 ```
 
-Optional — never let the machine sleep at all:
+- `｜服务商 · 模型`：这一轮实际用的端点。**走兜底的那轮记兜底的标签** —— 「为什么这轮风格不对」一眼能看出来
+- `↑输入`：发给模型的 token，括号里是**缓存命中**的部分；`↓输出`：模型回的 token
+- 悬停看精确值（`输入 49299 tokens（缓存命中 45964）· 输出 189`）
+- 历史版本抽屉里每一版也带自己的用量，恢复旧稿时用量跟着版本走
+- 用量识别三种形状：OpenAI（`prompt_tokens`）、Gemini 原生（`usageMetadata`，Google Vertex 走这个）、Claude（`input_tokens`）
 
-```bash
-sudo pmset -a sleep 0
+上游不回 usage 的那一轮就不显示，不影响别的。
+
+📖 [patches/04-offline-model-token/README.md](patches/04-offline-model-token/README.md)
+
+---
+
+## 安装器怎么用
+
+```
+node install.mjs --list                  列出补丁和状态（装没装、能不能装）
+node install.mjs                         预览：会改哪些文件（默认不写盘）
+node install.mjs --run --all             全装
+node install.mjs --only 01,02 --run      装指定几个
+node install.mjs --all --run --no-build  跳过前端构建（你自己会 build）
+node install.mjs --all --run --force     版本号对不上也强装
 ```
 
-Requires Uranus to be managed by launchd (`com.uranus.imessage`). If you start Uranus
-manually with `node`, edit `URANUS_LABEL` in `files/uranus-wake-restart.sh`.
+安装器做的事，按顺序：
+
+1. **找目录 + 认版本**：读 `package.json` 的 `name: uranus-imessage` 和 `version`；不是 1.22.3 会停下来问你（`--force` 才继续）
+2. **预演**：整份补丁先在内存里跑一遍，任何一个 hunk 对不上 → **整体不动**，一个字节都不写
+3. **备份**：被改的文件原样复制到 `.patches-backup-<时间戳>/`（含 `manifest.json`）
+4. **写入**：按 02 → 03 → 04 顺序打
+5. **语法检查**：`node --check` 每个改过的服务端文件，不过就**自动用备份回滚**
+6. **构建前端**：`cd client && npm run build`（没有 `node_modules` 会跳过并提醒）
+7. **自检**：跑 `tests/smoke.mjs`（纯逻辑，不联网、不碰你的数据）
+
+---
+
+## 卸载 / 回退
+
+```bash
+node uninstall.mjs           # 预览：会用哪份备份还原什么
+node uninstall.mjs --run     # 真的还原
+```
+
+卸载走**安装时的那份备份**，所以还原是逐字节的（新加的文件会被删掉，改过的文件会回到安装前）。
+补丁 01 有自己的卸载：`patches/01-nosleep-guard/uninstall.command`（只删定时任务，不动 Uranus 主服务）。
+
+---
+
+## Uranus 升级之后
+
+**升级会覆盖被改的文件** —— 补丁不是插件，是直接改源码。所以：
+
+```bash
+cd uranus_patches_awesome && git pull
+node install.mjs --list          # 看哪些补丁「已失效」
+node install.mjs --all --run     # 重新装上
+```
+
+- 版本号变了但代码没大动（1.22.x 内的小改）：`--force` 通常能打上
+- 大版本升级后上下文对不上：安装器会**拒绝安装并说明哪个文件对不上**，不会改坏东西。
+  这种情况提 issue，把 `package.json` 的版本号贴上，我按新版本重出补丁。
+
+---
+
+## 兼容性与已知限制
+
+- **补丁 02/03/04 只针对 Uranus 1.22.3**（基线源码：官方发布的 1.22.3，未含任何第三方改动）
+- 前端改的是 `client/src/panels/offline.jsx` 等文件，装完**必须重新 build**，否则界面还是旧的
+- 补丁只动「线下剧情」这条链，**不碰** iMessage 桥接、查手机、记忆库的既有逻辑
+- 03 的样式存在 `data/offline-bubbles.json`，备份 Uranus 时记得一起备份
+- 04 的用量只能从「有 usage 的上游」取；流式源不回 usage 尾帧的那一轮就没有数字
+- **不含任何角色卡、世界书、记忆库、API 密钥** —— 这个仓库只有机制，没有我的私人设定
+- 01 只支持 macOS（launchd / `pmset`）；Windows 与 Linux 请跳过 01
+
+---
+
+## 目录结构
+
+```
+uranus_patches_awesome/
+├── install.mjs               统一安装器（自带纯 JS 补丁引擎）
+├── uninstall.mjs             按备份还原
+├── 安装.command               双击：全装
+├── patches/
+│   ├── 01-nosleep-guard/     独立脚本补丁（不改代码）
+│   │   ├── README.md  USAGE.md
+│   │   ├── install.command  uninstall.command
+│   │   └── files/uranus-wake-restart.sh
+│   ├── 02-offline-version-history/   README.md + 02-version-history.patch
+│   ├── 03-offline-bubble-style/      README.md + 03-bubble-style.patch
+│   └── 04-offline-model-token/       README.md + 04-model-token.patch
+├── docs/
+│   ├── install.md            安装细节、叠装顺序、排错
+│   └── how-it-works.md       每个补丁的实现要点（给想改的人）
+├── tests/smoke.mjs           装完自检（纯逻辑，不联网）
+└── CHANGELOG.md
+```
+
+---
+
+## 为什么不直接用 git patch
+
+因为分发对象是「用 Uranus 的人」，不是「维护 Uranus 的人」：
+
+- 有人 Windows 上跑 Uranus，**没有 `patch` 命令**；有人机器上没装 git
+- `git apply` 要求上下文严格一致，Uranus 升级一次就全废，且**报错时半个文件可能已经写进去了**
+- 这里自带一个纯 JS 的统一 diff 引擎：先全文搜上下文（不靠行号），
+  唯一命中才动手；多处命中取离补丁行号最近的；**一处对不上就整份不动**
+
+代价是补丁文件必须保持「标准统一 diff」格式（`--- a/…` / `+++ b/…`），
+所以它们照样能用 `patch -p1 < xxx.patch` 打 —— 两条路都留着。
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT —— 见 [LICENSE](LICENSE)。代码拿走随便改，出问题别找我（Uranus 本体另有其许可）。
+
+---
+
+## English
+
+A small collection of patches for [Uranus](https://github.com/nikonotnicotine/Uranus_Imessage)
+(a self-hosted iMessage character-simulation app). Each patch does one thing, backs up
+before touching anything, and can be rolled back byte-for-byte.
+
+| # | Patch | What it fixes |
+|---|---|---|
+| 01 | `nosleep-guard` | After your Mac wakes from sleep, Uranus keeps running but its network stack is dead (`ENOTFOUND` everywhere). A launchd job restarts it once — only when the process is older than the last real wake. macOS only, no code changes. |
+| 02 | `offline-version-history` | Re-roll / manual edit / delete all keep a copy. A `历史 N` button on each bubble lists previous versions and restores any of them (current one is archived first). Never fed back into the model context. |
+| 03 | `offline-bubble-style` | Per-side bubble colours (background, border, text, radius) with live preview, **stored server-side** so phone and desktop finally share one style. |
+| 04 | `offline-model-token` | Bubble header shows which provider/model generated that turn (fallback included) plus `↑input (cached) ↓output` tokens. Handles OpenAI / Gemini-native / Claude usage shapes. |
+
+```bash
+node install.mjs --list              # what's available / installed
+node install.mjs --all --run         # install everything
+node install.mjs --only 02,03 --run  # or a subset
+node uninstall.mjs --run             # restore from backup
+```
+
+Requirements: Uranus **1.22.3** (patches 02–04 are source patches against that release),
+Node.js (already required by Uranus). Then restart Uranus and hard-refresh the console.
+
+Patches 02 → 03 → 04 stack in that order (same React component). 01 is independent.
+No character cards, world books, memories or API keys are included — mechanism only.

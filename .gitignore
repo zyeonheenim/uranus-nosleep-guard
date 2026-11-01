@@ -3,5 +3,12 @@
 *.out
 *.err
 
+# 安装时产生的备份
+.patches-backup-*/
+
+# 依赖与构建产物（如果有人把仓库塞进 Uranus 目录里跑）
+node_modules/
+dist/
+
 .DS_Store
 ._*
