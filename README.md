@@ -1,11 +1,23 @@
 # uranus_patches_awesome
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-MIT%20%2F%20non--commercial-lightgrey)
 ![Base](https://img.shields.io/badge/Uranus-1.22.3-blue)
 ![Patches](https://img.shields.io/badge/patches-4-orange)
 
 **给 [Uranus](https://github.com/nikonotnicotine/Uranus_Imessage) 用的一组补丁。一个补丁只干一件事，装之前自动备份，装坏了能一键退回。**
+
+> ### 先看清楚这是什么
+>
+> 这里**没有 Uranus 本体**，只有补丁。上游项目是
+> **[nikonotnicotine/Uranus_Imessage](https://github.com/nikonotnicotine/Uranus_Imessage)**
+> （自建 iMessage 角色扮演客户端，**非商业许可**），补丁基线是它的 **v1.22.3**。
+>
+> - **已经装了 Uranus** → 直接 `node install.mjs --all --run`，完事。
+> - **手上没有** → `node setup.mjs --run --install`：自动从上游官方仓库拉一份干净的 v1.22.3，再打补丁。
+>   仓库里不存源码副本（上游许可只允许「原样、不收费、附全文」地转发），原因见 [docs/upstream.md](docs/upstream.md)。
+>
+> 上游许可的核心就一句：**自己玩、自己学，随便；赚钱，不行。**
 
 这里的四个补丁都来自真实使用中的痛点，不是「看起来会很酷」的功能：
 
@@ -24,6 +36,7 @@
 ## 目录
 
 - [快速开始](#快速开始)
+- [上游项目与版本](#上游项目与版本)
 - [补丁清单](#补丁清单)
 - [01 · 唤醒防断流](#01--唤醒防断流-nosleep-guard)
 - [02 · 线下剧情 · 版本留底](#02--线下剧情--版本留底-version-history)
@@ -41,12 +54,21 @@
 
 ## 快速开始
 
+**手上已经有 Uranus：**
+
 ```bash
 git clone https://github.com/zyeonheenim/uranus_patches_awesome.git
 cd uranus_patches_awesome
 
 node install.mjs                 # 先看：会改哪些文件（不写盘）
 node install.mjs --all --run     # 真的装（01 + 02 + 03 + 04）
+```
+
+**手上还没有 Uranus（换机器、想先试装一份）：**
+
+```bash
+node setup.mjs                       # 预览：拉哪个 tag、拉到哪、装什么
+node setup.mjs --run --install       # 从上游拉干净的 v1.22.3，然后装全部补丁
 ```
 
 只想装其中一个：
@@ -64,6 +86,30 @@ Uranus 装在哪？安装器会自己找（当前目录 / 上一层 / `~/Uranus_
 ```bash
 URANUS_DIR=/path/to/Uranus_Imessage node install.mjs --all --run
 ```
+
+---
+
+## 上游项目与版本
+
+| 项 | 值 |
+|---|---|
+| 上游 | [nikonotnicotine/Uranus_Imessage](https://github.com/nikonotnicotine/Uranus_Imessage)（[@nikonotnicotine](https://github.com/nikonotnicotine)） |
+| 补丁基线 | **v1.22.3** |
+| 上游许可 | 自定义非商业许可（[LICENSE](https://github.com/nikonotnicotine/Uranus_Imessage/blob/master/LICENSE)） |
+| 本仓库自带源码 | **没有**（许可只允许原样转发；补丁属于修改） |
+
+补丁是按 tag 源码逐行对上的，所以版本很要紧：1.22.3 精确匹配；1.22.4 多半能过；
+更旧或更新会被**整体拒绝**（你的文件原封不动，不会写坏半个文件），`--force` 可强装。
+
+拉源码的方式有两种，结果一样（实测同为 282 个文件、逐字节无差异）：
+
+```bash
+node setup.mjs --run --install                 # 默认：git clone --depth 1 --branch v1.22.3
+node setup.mjs --run --install --no-git        # 没装 git：走官方 tarball
+node setup.mjs --run --use-existing --install  # 不下载，直接对已有目录装
+```
+
+细节（版本对应表、升级后怎么办、许可怎么算）：[docs/upstream.md](docs/upstream.md)。
 
 ---
 
@@ -217,7 +263,9 @@ node install.mjs --all --run     # 重新装上
 uranus_patches_awesome/
 ├── install.mjs               统一安装器（自带纯 JS 补丁引擎）
 ├── uninstall.mjs             按备份还原
+├── setup.mjs                 从上游拉干净源码（不存副本），再交给 install.mjs
 ├── 安装.command               双击：全装
+├── NOTICE.md                 归属与许可边界（上游非商业许可）
 ├── patches/
 │   ├── 01-nosleep-guard/     独立脚本补丁（不改代码）
 │   │   ├── README.md  USAGE.md
@@ -228,6 +276,7 @@ uranus_patches_awesome/
 │   └── 04-offline-model-token/       README.md + 04-model-token.patch
 ├── docs/
 │   ├── install.md            安装细节、叠装顺序、排错
+│   ├── upstream.md           上游项目、版本对应、许可、为什么不打包源码
 │   └── how-it-works.md       每个补丁的实现要点（给想改的人）
 ├── tests/smoke.mjs           装完自检（纯逻辑，不联网）
 └── CHANGELOG.md
@@ -251,7 +300,16 @@ uranus_patches_awesome/
 
 ## License
 
-MIT —— 见 [LICENSE](LICENSE)。代码拿走随便改，出问题别找我（Uranus 本体另有其许可）。
+分两层，别混：
+
+| 对象 | 许可 |
+|---|---|
+| 本仓库的脚本与文档（`install.mjs` / `uninstall.mjs` / `setup.mjs` / `tests/` / `patches/01-*/` 的脚本） | **MIT** —— 见 [LICENSE](LICENSE) |
+| `patches/**/*.patch` 里的代码片段 | **上游代码的衍生物**，跟着上游的**非商业**许可走 |
+| 打完补丁的 Uranus | 仍是上游作品，仍受上游许可约束 |
+
+一句话：**自己玩、自己学随便；卖钱、收费代搭建、二次修改后对外分发 —— 不行。**
+边界写清楚在 [NOTICE.md](NOTICE.md)。
 
 ---
 
@@ -280,3 +338,16 @@ Node.js (already required by Uranus). Then restart Uranus and hard-refresh the c
 
 Patches 02 → 03 → 04 stack in that order (same React component). 01 is independent.
 No character cards, world books, memories or API keys are included — mechanism only.
+
+**No Uranus source is bundled here.** Upstream is under a custom *non-commercial* licence
+that permits re-sharing only unmodified copies, so instead of vendoring a copy,
+`setup.mjs` fetches a clean `v1.22.3` straight from the official repository:
+
+```bash
+node setup.mjs --run --install            # git clone --branch v1.22.3, then install
+node setup.mjs --run --install --no-git   # same tree via tarball (no git needed)
+node setup.mjs --run --use-existing --install   # already have it? skip the download
+```
+
+Licence: our scripts are MIT; the `.patch` files contain upstream code fragments and
+therefore follow upstream's non-commercial terms. See [NOTICE.md](NOTICE.md).

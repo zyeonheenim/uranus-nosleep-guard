@@ -4,6 +4,21 @@
 
 ---
 
+## 零、还没有 Uranus？
+
+这个仓库不带源码。先拉一份干净的，再打补丁：
+
+```bash
+node setup.mjs                    # 预览：拉哪个 tag、拉到哪
+node setup.mjs --run --install    # 从上游拉 v1.22.3 → 直接装全部补丁
+```
+
+- 默认用 `git clone --depth 1 --branch v1.22.3`；没装 git 或走不通就 `--no-git` 走官方 tarball
+- 已经有一份想直接装：`node setup.mjs --run --use-existing --install --dir /path/to/Uranus_Imessage`
+- 拉下来的东西跟官方 tag 一模一样（实测 282 个文件、逐字节无差异），本仓库不留副本 —— 原因见 [upstream.md](upstream.md)
+
+---
+
 ## 一、装之前确认三件事
 
 1. **Uranus 是 1.22.3**（补丁 02/03/04 的基线；01 与版本无关）

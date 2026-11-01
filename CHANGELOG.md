@@ -2,6 +2,32 @@
 
 按「一个补丁一个功能」记。版本号指这个合集，不是 Uranus。
 
+## v1.0.1 — 2026-11-01
+
+### 新增 `setup.mjs`：把「原项目」也一起解决
+
+仓库不打包 Uranus 源码（上游许可是「非商业 + 原样转发须附全文」，补丁属于修改），
+改成**用的时候从上游拉**：
+
+```bash
+node setup.mjs                    # 预览
+node setup.mjs --run --install    # 拉 v1.22.3 → 装全部补丁
+```
+
+- 默认 `git clone --depth 1 --branch <tag>`；`--no-git` 走官方 tarball，自带 tar+gzip 解析，不依赖 `patch`/`git`/`tar` 命令
+- `--use-existing` 不下载，直接对已有目录装；`--dir` 指定落点；`--tag` 换版本
+- 目标目录已有非 Uranus 内容时**拒绝动手**，不会覆盖别人的东西
+- 实测两条拉取路径产物一致：282 个文件、`diff -rq` 无差异；拉完 `--install` 一把过（20 项自检）
+
+### 文档
+
+- 新增 [docs/upstream.md](docs/upstream.md)：上游项目、版本对应表、为什么不打包源码、许可怎么算
+- 新增 [NOTICE.md](NOTICE.md)：归属与许可边界（脚本 MIT / 补丁跟随上游非商业）
+- README 顶部加「先看清楚这是什么」区块；新增「上游项目与版本」章节；License 章节改成分层说明
+- 徽章从 `MIT` 改成 `MIT / non-commercial`
+
+---
+
 ## v1.0.0 — 2026-11-01
 
 仓库从 `uranus-nosleep-guard` 改名成 `uranus_patches_awesome`，从「一个补丁」变成「一组补丁」。
