@@ -77,9 +77,9 @@ node install.mjs --all --run  # 重新打一遍
 
 | 对象 | 许可 |
 |---|---|
-| 本仓库自己的脚本（`install.mjs` / `uninstall.mjs` / `setup.mjs` / `tests/` / 文档） | MIT，见 [LICENSE](LICENSE) |
+| 本仓库自己的脚本（`install.mjs` / `uninstall.mjs` / `setup.mjs` / `tests/` / 文档） | MIT，见 [../LICENSE](../LICENSE) |
 | `patches/*/**.patch` 里的代码片段 | **上游代码的衍生物**，跟着上游的非商业许可走 |
 | 打完补丁之后的 Uranus | 仍然是上游的作品，仍然受上游许可约束 |
 
 一句话：**这东西只许自己玩、自己学。不许卖、不许当付费服务、不许拿它做代搭建收费。**
-详见 [NOTICE.md](NOTICE.md)。
+详见 [../NOTICE.md](../NOTICE.md)。
